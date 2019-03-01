@@ -1,0 +1,151 @@
+from IPython.display import Image, SVG
+import matplotlib.pyplot as plt
+
+%matplotlib inline
+
+import numpy as np
+import keras
+from keras.datasets import mnist
+from keras.regularizers import l2
+from keras.models import Model, Sequential
+from keras.layers import Input, Dense, Conv2D, MaxPooling2D, UpSampling2D, Flatten, Reshape, Conv2DTranspose
+from keras import regularizers
+from keras import optimizers
+from keras.callbacks import CSVLogger
+
+#Definimos el callback que nos guardará los resultados de cada época
+csv_logger1 = CSVLogger('Nombre', separator=',', append=False)
+
+#Definimos las particularidades del método SGD
+sgd = optimizers.SGD(lr=0.01, momentum=0.0, decay=0.0, nesterov=False)
+
+# Cargamos la base de datos de MNIST, sólo nos interesan las imagenes  y no las etiquetas
+#ya que estamos generando un autoencoder
+(x_train, _), (x_test, _) = mnist.load_data()
+
+# Escalamos los datos a valores entre 0 y 1 
+max_value = float(x_train.max())
+x_train = x_train.astype('float32') / max_value
+x_test = x_test.astype('float32') / max_value
+
+#Agregamos un poco de ruido a la imagen (para el último punto del informe)
+x_train_n = x_train + np.random.normal(loc=0.0, scale=0.5, size=x_train.shape)
+x_train_n = np.clip(x_train_n, 0., 1.) #Recorta los valores a valores entre  cero y 1
+
+x_test_n = x_test + np.random.normal(loc=0.0, scale=0.5, size=x_test.shape)
+x_test_n = np.clip(x_test_n, 0., 1.)
+
+#Agrego una dimensión más a los datos para que me indiquen que son imágenes grayscale
+x_train = np.expand_dims(x_train, axis=3)
+x_test = np.expand_dims(x_test, axis=3)
+x_train_n = np.expand_dims(x_train_n, axis=3)
+x_test_n = np.expand_dims(x_test_n, axis=3)
+
+#Instaciamos el autoencoder:
+autoencoder = Sequential()
+
+######################  RED SIMPLE   #################################
+###Primero las capas de la etapa de codificación
+##autoencoder.add(Conv2D(6, (5, 5), padding='valid', activation='relu',input_shape=x_train.shape[1:]))
+##autoencoder.add(MaxPooling2D((2, 2), padding='same'))
+##
+### Lo pasadamos a un vector para visualizar la imágen codificada
+##autoencoder.add(Flatten())
+##
+### Lo devolvemos a la forma original para enviarlo a las capas decodificadoras
+##autoencoder.add(Reshape((12, 12, 6)))
+##
+### Capas de la etapa de decodificación:
+##autoencoder.add(Conv2D(20, (3, 3), activation='relu', padding='same'))
+##autoencoder.add(UpSampling2D((2, 2)))
+##autoencoder.add(Conv2DTranspose(1,(5,5),activation='relu'))
+
+#####################  SEGUNDA RED #####################################
+### Definimos el Encoder:
+##autoencoder.add(Conv2D(16, (3, 3), activation='relu', padding='same', input_shape=x_train.shape[1:]))
+##autoencoder.add(MaxPooling2D((2, 2), padding='same'))
+##autoencoder.add(Conv2D(8, (3, 3), activation='relu', padding='same'))
+##autoencoder.add(MaxPooling2D((2, 2), padding='same'))
+##autoencoder.add(Conv2D(8, (3, 3), strides=(2,2), activation='relu', padding='same'))
+##
+### Flatten para mejorar visulización
+##autoencoder.add(Flatten())
+##autoencoder.add(Reshape((4, 4, 8)))
+##
+### Decoder:
+##autoencoder.add(Conv2D(8, (3, 3), activation='relu', padding='same'))
+##autoencoder.add(UpSampling2D((2, 2)))
+##autoencoder.add(Conv2D(8, (3, 3), activation='relu', padding='same'))
+##autoencoder.add(UpSampling2D((2, 2)))
+##autoencoder.add(Conv2D(16, (3, 3), activation='relu'))
+##autoencoder.add(UpSampling2D((2, 2)))
+##autoencoder.add(Conv2D(1, (3, 3), activation='sigmoid', padding='same'))
+
+#################### TERCERA RED - X.Guo et al. 2017 #########################
+#Codificador:
+autoencoder.add(Conv2D(32, (3,3),strides=(2,2), activation='relu', padding='same', input_shape=x_train.shape[1:]))
+autoencoder.add(Conv2D(64, (3,3),strides=(2,2), activation='relu', padding='same'))
+autoencoder.add(Conv2D(128, (3, 3), strides=(2,2), activation='relu', padding='valid'))
+autoencoder.add(Flatten())
+autoencoder.add(Dense(10, activation='relu'))
+#Decoder:
+autoencoder.add(Dense(1152, activation='relu'))
+autoencoder.add(Reshape((3, 3, 128)))
+autoencoder.add(Conv2DTranspose(64, (3, 3),strides=(2,2), activation='relu'))
+autoencoder.add(Conv2DTranspose(32, (3, 3),strides=(2,2), activation='relu',padding='same'))
+autoencoder.add(Conv2DTranspose(1, (3, 3),strides=(2,2), activation='relu',padding='same'))
+
+# Nos imprime un resumen de las capas de la red (tamaños de capas parámetros a calcular, entre otros)
+autoencoder.summary()
+
+## Para mostrar las imágenes codificadas instanciamos otro modelo, que va a tener los mismos pesos 
+# que la primera parte del CAE:
+encoder = Model(inputs=autoencoder.input, outputs=autoencoder.get_layer('dense_1').output)
+encoder.summary()
+
+#Compilamos el autoencoder, estableciendo el método de optimización y el método de loss: 
+autoencoder.compile(optimizer='adam', loss='mean_squared_error',metrics=['accuracy'])
+
+#Se entrena la red:
+autoencoder.fit(x_train_n, x_train,
+                epochs=200,
+                validation_data=(x_test_n, x_test),callbacks=[csv_logger1])
+
+#Se evalúa la red:
+testr = autoencoder.evaluate(x_test_n, x_test, verbose=1)
+print(testr)
+
+###################   GRAFICO DE IMÁGENES   ###############################
+num_images = 10
+np.random.seed(42)
+random_test_images = np.random.randint(x_test_n.shape[0], size=num_images)
+
+#Se obtienen las salidas predichas por la red:
+encoded_imgs = encoder.predict(x_test_n)
+decoded_imgs = autoencoder.predict(x_test_n)
+
+plt.figure(figsize=(18, 4))
+
+for i, image_idx in enumerate(random_test_images):
+    # plot original image
+    ax = plt.subplot(3, num_images, i + 1)
+    plt.imshow(x_test_n[image_idx].reshape(28, 28))
+    plt.gray()
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+    
+    # plot encoded image
+    ax = plt.subplot(3, num_images, num_images + i + 1)
+    plt.imshow(encoded_imgs[image_idx].reshape(16, 8))
+    plt.gray()
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+    
+    # plot reconstructed image
+    ax = plt.subplot(3, num_images, 2*num_images + i + 1)
+    plt.imshow(decoded_imgs[image_idx].reshape(28, 28))
+    plt.gray()
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+plt.savefig('Paper2.jpg')
+plt.show()
